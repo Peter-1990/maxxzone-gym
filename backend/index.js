@@ -26,6 +26,8 @@ app.use('/plans',MembershipRoutes);
 app.use('/members', MemberRoutes);
 app.use('/diet-plan', DietPlanRoutes)
 
+app.get("/", (req, res) => res.send("API Working"))
+
 app.listen(PORT,()=>{
     console.log("Server is running on Port 4000")
 })
