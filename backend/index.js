@@ -7,10 +7,14 @@ require('dotenv').config()
 
 const PORT = process.env.PORT;
 
+// Updated CORS configuration
 app.use(cors({
-    origin: 'http://localhost:3000', // Your React app's URL
+    origin: [
+        'http://localhost:3000', // Your local development environment
+        'https://maxxzone-gym-uw2w.vercel.app' // Your production frontend
+    ],
     credentials: true
-  }))
+}))
 
 app.use(cookieParser());
 app.use(express.json());
