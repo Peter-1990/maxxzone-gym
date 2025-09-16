@@ -2,9 +2,8 @@ const express = require('express');
 const app = express();
 const cookieParser = require("cookie-parser");
 const cors = require('cors');
-const mongoose = require('mongoose');
 
-require('dotenv').config();
+require('dotenv').config()
 
 const PORT = process.env.PORT || 4000;
 
@@ -58,6 +57,7 @@ app.get('/api/health', (req, res) => {
 // Test database connection
 app.get('/api/test-db', async (req, res) => {
   try {
+    const mongoose = require('mongoose');
     const connectionState = mongoose.connection.readyState;
     const states = ['disconnected', 'connected', 'connecting', 'disconnecting'];
     
@@ -73,82 +73,19 @@ app.get('/api/test-db', async (req, res) => {
 
 // Test environment variables
 app.get('/api/test-env', (req, res) => {
-  // Don't expose actual values in production
-  const isProduction = process.env.NODE_ENV === 'production';
-  
   res.json({
     node_env: process.env.NODE_ENV,
     has_mongodb: !!process.env.MONGODB_URI,
     has_jwt: !!process.env.JWT_SecretKey,
     has_email: !!process.env.SENDER_EMAIL,
     has_email_pass: !!process.env.EMAIL_PASSWORD,
-    port: process.env.PORT,
-    // Only show actual values in development
-    ...(!isProduction && {
-      mongodb_uri: process.env.MONGODB_URI ? 'Set' : 'Not set',
-      jwt_secret: process.env.JWT_SecretKey ? 'Set' : 'Not set',
-      sender_email: process.env.SENDER_EMAIL ? 'Set' : 'Not set'
-    })
-  });
-});
-
-// Test cookie and auth setup
-app.get('/api/test-auth', (req, res) => {
-  const token = req.cookies.cookie_token;
-  
-  res.json({
-    cookie_received: !!token,
-    cookie_length: token ? token.length : 0,
-    cookies: req.cookies
+    port: process.env.PORT
   });
 });
 
 // ==================== DATABASE CONNECTION ====================
-const connectDB = async () => {
-  try {
-    if (!process.env.MONGODB_URI) {
-      console.error('❌ MONGODB_URI is not defined in environment variables');
-      throw new Error('MongoDB connection string is missing');
-    }
-
-    console.log('🔗 Connecting to MongoDB...');
-    
-    await mongoose.connect(process.env.MONGODB_URI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-    });
-
-    console.log('✅ MongoDB connected successfully');
-    
-    // Test the connection with a simple query
-    const Gym = require('./Models/gym');
-    const count = await Gym.countDocuments();
-    console.log(`📊 Total gyms in database: ${count}`);
-    
-  } catch (error) {
-    console.error('❌ MongoDB connection error:', error.message);
-    // Don't exit process in production to allow for auto-recovery
-    if (process.env.NODE_ENV !== 'production') {
-      process.exit(1);
-    }
-  }
-};
-
-// Connect to database
-connectDB();
-
-// Database connection events
-mongoose.connection.on('connected', () => {
-  console.log('✅ MongoDB connection established');
-});
-
-mongoose.connection.on('error', (err) => {
-  console.error('❌ MongoDB connection error:', err);
-});
-
-mongoose.connection.on('disconnected', () => {
-  console.log('⚠️ MongoDB connection disconnected');
-});
+// Import and initialize the database connection
+require('./DBConn/conn.js');
 
 // ==================== ROUTES ====================
 // Import routes
@@ -163,29 +100,42 @@ app.use('/plans', MembershipRoutes);
 app.use('/members', MemberRoutes);
 app.use('/diet-plan', DietPlanRoutes);
 
+// Root endpoint
+app.get("/", (req, res) => {
+  res.json({ 
+    message: "MaxxZone Gym API Working",
+    version: "1.0.0",
+    documentation: "Visit /api/health for server status"
+  });
+});
+
 // ==================== ERROR HANDLING ====================
 // 404 handler - must be after all routes
 app.use('*', (req, res) => {
   res.status(404).json({ 
     error: "Route not found",
     path: req.originalUrl,
-    method: req.method
+    method: req.method,
+    available_endpoints: [
+      '/api/health',
+      '/api/test-db', 
+      '/api/test-env',
+      '/auth/login',
+      '/auth/register',
+      '/plans/',
+      '/members/',
+      '/diet-plan/'
+    ]
   });
 });
 
 // Global error handler - must be last middleware
 app.use((error, req, res, next) => {
-  console.error('💥 Global Error Handler:', error);
-  
-  // Log detailed error in development
-  if (process.env.NODE_ENV !== 'production') {
-    console.error('Error Stack:', error.stack);
-  }
+  console.error('Global Error Handler:', error);
   
   res.status(error.status || 500).json({
     error: "Internal Server Error",
-    message: process.env.NODE_ENV === 'production' ? 'Something went wrong' : error.message,
-    ...(process.env.NODE_ENV !== 'production' && { stack: error.stack })
+    message: process.env.NODE_ENV === 'production' ? 'Something went wrong' : error.message
   });
 });
 
@@ -199,21 +149,8 @@ app.listen(PORT, () => {
 // Handle graceful shutdown
 process.on('SIGINT', async () => {
   console.log('\n🛑 Shutting down server gracefully...');
+  const mongoose = require('mongoose');
   await mongoose.connection.close();
   console.log('✅ MongoDB connection closed');
   process.exit(0);
-});
-
-// Handle unhandled promise rejections
-process.on('unhandledRejection', (err) => {
-  console.log('💥 UNHANDLED REJECTION! Shutting down...');
-  console.log(err.name, err.message);
-  process.exit(1);
-});
-
-// Handle uncaught exceptions
-process.on('uncaughtException', (err) => {
-  console.log('💥 UNCAUGHT EXCEPTION! Shutting down...');
-  console.log(err.name, err.message);
-  process.exit(1);
 });
