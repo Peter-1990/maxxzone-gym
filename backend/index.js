@@ -2,7 +2,6 @@ const express = require('express');
 const app = express();
 const cookieParser = require("cookie-parser");
 const cors = require('cors');
-const mongoose = require('mongoose');
 
 require('dotenv').config();
 
@@ -41,34 +40,46 @@ app.use((error, req, res, next) => {
   next();
 });
 
+// ==================== DATABASE CONNECTION ====================
+// Serverless-optimized database connection
+// In your index.js, use this connection logic:
+const mongoose = require('./DBConn/conn');
+
+// If it's a function (serverless), we'll connect in middleware
+// If it's already connected (local), we're good to go
+
+if (typeof mongoose === 'function') {
+  // Serverless mode - connect via middleware
+  app.use(async (req, res, next) => {
+    try {
+      await mongoose();
+      next();
+    } catch (error) {
+      res.status(500).json({ error: "Database connection failed" });
+    }
+  });
+} else {
+  // Local mode - already connected
+  console.log('✅ Database connection initialized');
+}
+
 // ==================== DEBUG ENDPOINTS ====================
 // Add these before your routes for debugging
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
+  const mongoose = require('mongoose');
+  const connectionState = mongoose.connection.readyState;
+  const states = ['disconnected', 'connected', 'connecting', 'disconnecting'];
+  
   res.json({ 
     status: 'OK',
     message: 'Server is running!',
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'development',
-    port: PORT
+    port: PORT,
+    database_status: states[connectionState] || 'unknown'
   });
-});
-
-// Test database connection
-app.get('/api/test-db', async (req, res) => {
-  try {
-    const connectionState = mongoose.connection.readyState;
-    const states = ['disconnected', 'connected', 'connecting', 'disconnecting'];
-    
-    res.json({ 
-      database_status: states[connectionState] || 'unknown',
-      mongodb_uri_set: !!process.env.MONGODB_URI,
-      node_env: process.env.NODE_ENV
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
 });
 
 // Test environment variables
@@ -83,48 +94,49 @@ app.get('/api/test-env', (req, res) => {
   });
 });
 
-// Detailed database debug endpoint - NEW
+// Improved debug endpoint
 app.get('/api/debug-db', async (req, res) => {
   try {
+    const mongoose = require('mongoose');
     const connectionState = mongoose.connection.readyState;
     const states = ['disconnected', 'connected', 'connecting', 'disconnecting'];
     
-    // Try to connect directly to see the actual error
-    let connectionError = null;
     let connectionInfo = null;
+    let connectionError = null;
     
-    try {
-      // Store original connection state
-      const originalState = mongoose.connection.readyState;
-      
-      // Only try to connect if not already connected
-      if (originalState !== 1) {
-        await mongoose.connect(process.env.MONGODB_URI, {
+    // Try to get actual connection info
+    if (mongoose.connection.readyState === 1) {
+      connectionInfo = {
+        connected: true,
+        dbName: mongoose.connection.db?.databaseName,
+        host: mongoose.connection.host,
+        port: mongoose.connection.port,
+        readyState: states[connectionState]
+      };
+    } else {
+      // Try to connect to get error details
+      try {
+        const conn = await mongoose.createConnection(process.env.MONGODB_URI, {
           useNewUrlParser: true,
           useUnifiedTopology: true,
           serverSelectionTimeoutMS: 5000
         });
+        
         connectionInfo = {
           connected: true,
-          dbName: mongoose.connection.db?.databaseName
+          dbName: conn.db?.databaseName,
+          host: conn.host,
+          port: conn.port,
+          readyState: 'connected (test connection)'
         };
-      } else {
-        connectionInfo = {
-          connected: true,
-          dbName: mongoose.connection.db?.databaseName,
-          alreadyConnected: true
+        
+        await conn.close();
+      } catch (error) {
+        connectionError = {
+          name: error.name,
+          message: error.message,
+          code: error.code
         };
-      }
-    } catch (error) {
-      connectionError = {
-        name: error.name,
-        message: error.message,
-        code: error.code
-      };
-    } finally {
-      // Disconnect if we connected successfully for this test
-      if (mongoose.connection.readyState === 1 && connectionInfo && !connectionInfo.alreadyConnected) {
-        await mongoose.disconnect();
       }
     }
     
@@ -134,7 +146,9 @@ app.get('/api/debug-db', async (req, res) => {
       connection_error: connectionError,
       connection_info: connectionInfo,
       node_env: process.env.NODE_ENV,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      serverless: true,
+      note: 'Vercel serverless environment may show disconnected state between requests'
     });
     
   } catch (error) {
@@ -145,7 +159,7 @@ app.get('/api/debug-db', async (req, res) => {
   }
 });
 
-// Test MongoDB connection with details - NEW
+// Test MongoDB connection with details
 app.get('/api/test-mongo-details', async (req, res) => {
   try {
     // Mask the connection string for security
@@ -157,22 +171,16 @@ app.get('/api/test-mongo-details', async (req, res) => {
     let errorDetails = null;
     
     try {
-      // Try to connect
-      await mongoose.connect(process.env.MONGODB_URI, {
-        useNewUrlParser: true,
-        useUnifiedTopology: true,
-        serverSelectionTimeoutMS: 8000
-      });
+      // Use the connectDB function instead of direct mongoose.connect
+      const mongooseInstance = await connectDB();
       
       connectionResult = {
         success: true,
-        dbName: mongoose.connection.db?.databaseName,
-        host: mongoose.connection.host,
-        port: mongoose.connection.port
+        dbName: mongooseInstance.connection.db?.databaseName,
+        host: mongooseInstance.connection.host,
+        port: mongooseInstance.connection.port,
+        readyState: ['disconnected', 'connected', 'connecting', 'disconnecting'][mongooseInstance.connection.readyState]
       };
-      
-      // Disconnect after test
-      await mongoose.disconnect();
       
     } catch (error) {
       errorDetails = {
@@ -196,53 +204,6 @@ app.get('/api/test-mongo-details', async (req, res) => {
       message: error.message 
     });
   }
-});
-
-// ==================== DATABASE CONNECTION ====================
-// Connect to MongoDB with better error handling
-async function connectDatabase() {
-  try {
-    if (!process.env.MONGODB_URI) {
-      throw new Error('MONGODB_URI is not defined in environment variables');
-    }
-    
-    console.log('🔗 Attempting to connect to MongoDB...');
-    
-    await mongoose.connect(process.env.MONGODB_URI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-      serverSelectionTimeoutMS: 10000,
-      socketTimeoutMS: 45000,
-    });
-    
-    console.log('✅ MongoDB connected successfully!');
-    
-  } catch (error) {
-    console.error('❌ MongoDB connection failed:');
-    console.error('Error name:', error.name);
-    console.error('Error message:', error.message);
-    
-    // Don't exit process in production
-    if (process.env.NODE_ENV !== 'production') {
-      process.exit(1);
-    }
-  }
-}
-
-// Initialize database connection
-connectDatabase();
-
-// MongoDB connection events
-mongoose.connection.on('connected', () => {
-  console.log('✅ MongoDB connection established');
-});
-
-mongoose.connection.on('error', (err) => {
-  console.error('❌ MongoDB connection error:', err.message);
-});
-
-mongoose.connection.on('disconnected', () => {
-  console.log('⚠️ MongoDB connection disconnected');
 });
 
 // ==================== ROUTES ====================
@@ -328,18 +289,21 @@ app.post('/auth/temp-register', async (req, res) => {
 
 // ==================== ROOT ENDPOINT ====================
 app.get("/", (req, res) => {
+  const mongoose = require('mongoose');
+  const connectionState = mongoose.connection.readyState;
+  const states = ['disconnected', 'connected', 'connecting', 'disconnecting'];
+  
   res.json({ 
     message: "MaxxZone Gym API Working",
     version: "1.0.0",
+    database_status: states[connectionState] || 'unknown',
     endpoints: {
       health: "/api/health",
-      test_db: "/api/test-db",
       debug_db: "/api/debug-db",
       test_env: "/api/test-env",
       temp_login: "/auth/temp-login",
       temp_register: "/auth/temp-register"
-    },
-    database_status: mongoose.connection.readyState === 1 ? "connected" : "disconnected"
+    }
   });
 });
 
@@ -374,6 +338,7 @@ app.listen(PORT, () => {
 // Handle graceful shutdown
 process.on('SIGINT', async () => {
   console.log('\n🛑 Shutting down server gracefully...');
+  const mongoose = require('mongoose');
   await mongoose.connection.close();
   console.log('✅ MongoDB connection closed');
   process.exit(0);
