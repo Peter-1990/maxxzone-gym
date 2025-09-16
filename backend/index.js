@@ -22,6 +22,7 @@ app.use(cors({
     if (allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
+      console.log('Blocked by CORS:', origin);
       callback(new Error('Not allowed by CORS'));
     }
   },
@@ -31,12 +32,13 @@ app.use(cors({
 app.use(cookieParser());
 app.use(express.json({ limit: '10mb' }));
 
-// Add error handling middleware
+// Better error handling middleware
 app.use((error, req, res, next) => {
-  if (error instanceof SyntaxError) {
-    return res.status(400).json({ error: "Invalid JSON payload" });
-  }
-  next();
+  console.error('Error:', error);
+  res.status(500).json({ 
+    error: 'Internal Server Error',
+    message: process.env.NODE_ENV === 'production' ? 'Something went wrong' : error.message
+  });
 });
 
 // Database connection
